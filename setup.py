@@ -66,12 +66,10 @@ def test_imports():
     try:
         import fastapi
         import uvicorn
-        import crewai
         import supabase
         import dotenv
         import pydantic
-        import langchain
-        import langchain_openai
+        import pydantic_ai
         print("✅ All imports successful")
         return True
     except ImportError as e:

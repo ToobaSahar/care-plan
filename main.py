@@ -53,7 +53,7 @@ async def generate_care_plan(
     Generate a care plan for the specified or most recent assessment
     """
     try:
-        response = care_plan_service.generate_care_plan(
+        response = await care_plan_service.generate_care_plan(
             assessment_id=request.assessment_id,
             use_recent=request.use_recent
         )
@@ -75,7 +75,7 @@ async def generate_care_plan_recent(staff: dict = Depends(require_write_access))
     Generate a care plan for the most recent assessment
     """
     try:
-        response = care_plan_service.generate_care_plan(use_recent=True)
+        response = await care_plan_service.generate_care_plan(use_recent=True)
         
         if not response.success:
             raise HTTPException(status_code=400, detail=response.message)
@@ -97,7 +97,7 @@ async def generate_care_plan_by_id(
     Generate a care plan for a specific assessment ID
     """
     try:
-        response = care_plan_service.generate_care_plan(assessment_id=assessment_id)
+        response = await care_plan_service.generate_care_plan(assessment_id=assessment_id)
         
         if not response.success:
             raise HTTPException(status_code=400, detail=response.message)

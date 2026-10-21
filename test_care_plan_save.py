@@ -6,6 +6,7 @@ Test script to verify care plan generation and saving functionality
 import sys
 import os
 import json
+import asyncio
 from datetime import datetime
 
 # Add the backend directory to the path
@@ -42,7 +43,7 @@ def test_care_plan_generation_and_save():
         
         # Test 2: Generate care plan using agents
         print("\n🤖 Test 2: Generating care plan using AI agents...")
-        care_plan = agents.generate_care_plan(assessment_data)
+        care_plan = asyncio.run(agents.generate_care_plan(assessment_data))
         
         if 'error' in care_plan:
             print(f"❌ Error generating care plan: {care_plan['error']}")
@@ -119,7 +120,7 @@ def test_service_integration():
         
         # Test generating care plan for recent assessment
         print("📋 Generating care plan for recent assessment...")
-        response = service.generate_care_plan(use_recent=True)
+        response = asyncio.run(service.generate_care_plan(use_recent=True))
         
         if response.success:
             print("✅ Service integration test passed")
