@@ -1,74 +1,99 @@
-import requests
 import json
-from config import Config
+import logging
 from typing import Dict, List
 
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from config import Config
+
+logger = logging.getLogger(__name__)
+
+
 class CarePlanAgents:
+    """Generate care plans via the OpenAI Chat Completions API."""
+
+    API_URL = "https://api.openai.com/v1/chat/completions"
+    TEMPERATURE = 0.7
+    MAX_COMPLETION_TOKENS = 4000
+    # (connect, read) seconds - read is generous because care plans are long.
+    TIMEOUT = (10, 120)
+    # Retried with exponential backoff on throttling and transient upstream errors.
+    MAX_RETRIES = 3
+    RETRY_STATUSES = (408, 409, 429, 500, 502, 503, 504)
+
+    SYSTEM_PROMPT = (
+        "You are an experienced healthcare professional specializing in geriatric "
+        "care assessment and care plan generation. Respond clearly and helpfully "
+        "with detailed, actionable care plans."
+    )
+
     def __init__(self):
-        self.api_key = Config.GEMINI_API_KEY
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta"
-        self.model = "gemini-2.0-flash"
-        
-    def _call_gemini_api(self, messages: List[Dict]) -> str:
-        """Make a direct API call to Gemini Flash 2.0"""
-        headers = {
-            "Content-Type": "application/json"
-        }
-        
-        # Convert messages to Gemini format
-        system_prompt = "You are an experienced healthcare professional specializing in geriatric care assessment and care plan generation. Respond clearly and helpfully with detailed, actionable care plans."
-        full_prompt = self._build_gemini_prompt(system_prompt, messages)
-        
+        self.api_key = Config.OPENAI_API_KEY
+        if not self.api_key:
+            raise RuntimeError(
+                "OPENAI_API_KEY is not set. Add it to your .env file or host environment."
+            )
+        self.model = Config.OPENAI_MODEL
+        self._session = self._build_session()
+
+    @classmethod
+    def _build_session(cls) -> requests.Session:
+        """A pooled session so the three sequential calls reuse one TLS connection."""
+        retry = Retry(
+            total=cls.MAX_RETRIES,
+            backoff_factor=2,
+            status_forcelist=cls.RETRY_STATUSES,
+            allowed_methods=frozenset({"POST"}),
+            respect_retry_after_header=True,
+            raise_on_status=False,
+        )
+        session = requests.Session()
+        session.mount("https://", HTTPAdapter(max_retries=retry, pool_maxsize=10))
+        return session
+
+    def _call_openai_api(self, messages: List[Dict]) -> str:
+        """Make a chat completion request and return the assistant's text."""
         payload = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": full_prompt}
-                    ]
-                }
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                *messages,
             ],
-            "generationConfig": {
-                "temperature": 0.7,
-                "maxOutputTokens": 4000
-            }
+            "temperature": self.TEMPERATURE,
+            "max_completion_tokens": self.MAX_COMPLETION_TOKENS,
         }
-        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
         try:
-            response = requests.post(
-                f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}",
+            response = self._session.post(
+                self.API_URL,
                 headers=headers,
                 json=payload,
-                timeout=60
+                timeout=self.TIMEOUT,
             )
             response.raise_for_status()
-            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception as e:
-            print(f"Error calling Gemini API: {e}")
-            raise e
-    
-    def _build_gemini_prompt(self, system_prompt: str, messages: List[Dict]) -> str:
-        """Build prompt in Gemini format"""
-        buffer = []
-        
-        # Add system prompt at the beginning
-        buffer.append(f"System: {system_prompt.strip()}")
-        buffer.append("")
-        
-        # Only take last 5 turns to keep context tight
-        recent_messages = messages[-5:] if len(messages) > 5 else messages
-        
-        for message in recent_messages:
-            role = message.get('role', '')
-            content = message.get('content', '').strip()
-            
-            if role == 'user':
-                buffer.append(f"User: {content}")
-            elif role == 'assistant':
-                buffer.append(f"Assistant: {content}")
-        
-        return "\n".join(buffer)
-    
+            data = response.json()
+        except requests.HTTPError as e:
+            # Log the response body only - headers carry the API key.
+            status = e.response.status_code if e.response is not None else "unknown"
+            body = e.response.text[:500] if e.response is not None else ""
+            logger.error("OpenAI API returned %s: %s", status, body)
+            raise
+        except requests.RequestException as e:
+            logger.error("OpenAI API request failed: %s", e)
+            raise
+
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as e:
+            logger.error("Unexpected OpenAI response shape: %s", json.dumps(data)[:500])
+            raise RuntimeError("Unexpected OpenAI response shape") from e
+
     def generate_care_plan(self, assessment_data: Dict) -> Dict:
         """Generate care plans for each of the 7 assessment sections"""
         
@@ -94,7 +119,7 @@ class CarePlanAgents:
         """
         
         print("🔍 Step 1: Analyzing assessment data...")
-        analysis_result = self._call_gemini_api([
+        analysis_result = self._call_openai_api([
             {"role": "user", "content": analysis_prompt}
         ])
         
@@ -188,7 +213,7 @@ class CarePlanAgents:
         """
         
         print("📋 Step 2: Generating care plans for each section...")
-        planning_result = self._call_gemini_api([
+        planning_result = self._call_openai_api([
             {"role": "user", "content": planning_prompt}
         ])
         
@@ -215,7 +240,7 @@ class CarePlanAgents:
         """
         
         print("✅ Step 3: Quality assurance review...")
-        qa_result = self._call_gemini_api([
+        qa_result = self._call_openai_api([
             {"role": "user", "content": qa_prompt}
         ])
         

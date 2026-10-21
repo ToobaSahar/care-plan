@@ -1,8 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from service import CarePlanService
 from models import CarePlanRequest, CarePlanResponse
 from config import Config
+from auth import require_write_access
+from staff_api import router as staff_router
 import uvicorn
 
 app = FastAPI(
@@ -11,14 +13,25 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add CORS middleware
+# CORS
+#
+# `allow_origins=["*"]` together with `allow_credentials=True` is rejected by
+# every browser anyway, so the old setting was both unsafe and non-working.
+# Origins are now an explicit allow-list from ALLOWED_ORIGINS, which must name
+# the deployed frontend (e.g. https://careframe.vercel.app). Credentials are
+# off because the session travels in an Authorization header, not a cookie.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=Config.ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    max_age=600,
 )
+
+# Managing the care team needs the service role key, which only exists on
+# this side of the wire. See staff_api for why it is not a browser call.
+app.include_router(staff_router)
 
 # Initialize service
 care_plan_service = CarePlanService()
@@ -32,7 +45,10 @@ async def health_check():
     return {"status": "healthy", "service": "care-plan-generator"}
 
 @app.post("/generate-care-plan", response_model=CarePlanResponse)
-async def generate_care_plan(request: CarePlanRequest):
+async def generate_care_plan(
+    request: CarePlanRequest,
+    staff: dict = Depends(require_write_access),
+):
     """
     Generate a care plan for the specified or most recent assessment
     """
@@ -46,12 +62,15 @@ async def generate_care_plan(request: CarePlanRequest):
             raise HTTPException(status_code=400, detail=response.message)
         
         return response
-        
+
+    except HTTPException:
+        # Already carries a deliberate status code - do not flatten to 500.
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.get("/generate-care-plan/recent", response_model=CarePlanResponse)
-async def generate_care_plan_recent():
+async def generate_care_plan_recent(staff: dict = Depends(require_write_access)):
     """
     Generate a care plan for the most recent assessment
     """
@@ -62,12 +81,18 @@ async def generate_care_plan_recent():
             raise HTTPException(status_code=400, detail=response.message)
         
         return response
-        
+
+    except HTTPException:
+        # Already carries a deliberate status code - do not flatten to 500.
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.get("/generate-care-plan/{assessment_id}", response_model=CarePlanResponse)
-async def generate_care_plan_by_id(assessment_id: str):
+async def generate_care_plan_by_id(
+    assessment_id: str,
+    staff: dict = Depends(require_write_access),
+):
     """
     Generate a care plan for a specific assessment ID
     """
@@ -78,7 +103,10 @@ async def generate_care_plan_by_id(assessment_id: str):
             raise HTTPException(status_code=400, detail=response.message)
         
         return response
-        
+
+    except HTTPException:
+        # Already carries a deliberate status code - do not flatten to 500.
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
